@@ -1,0 +1,159 @@
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: moja
+provisioner: kubernetes.io/gce-pd
+parameters:
+  type: pd-standard
+---
+kind: PersistentVolumeClaim
+apiVersion: v1
+metadata:
+  name: backup-dir-pv-claim
+spec:
+  accessModes:
+    - ReadWriteOnce
+  # selector:
+  #   matchLabels:
+  #     type: "percona-backup"
+  storageClassName: "moja"
+  resources:
+    requests:
+      storage: 1Gi
+---
+kind: ConfigMap
+apiVersion: v1
+metadata:
+  name: xtrabackup-configs
+  namespace: default
+data:
+  .mykeyfile: "Rn8cFBcCc/ccuw9+4Go/t0rFRPB7P13P"
+---
+apiVersion: batch/v1beta1
+kind: CronJob
+metadata:
+  name: percona-xtrabackup-full
+spec:
+  schedule: "23 * * * *"
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 1
+  concurrencyPolicy: Forbid
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          containers:
+          - name: xtrabackup
+            image: spakmaro/xtrabackup
+            env:
+              - name: K8S_SERVICE_NAME
+                value: percona-galera-xtradb
+              - name: XTRABACKUP_PASSWORD
+                value: hesloheslo 
+              - name: BACKUP_TYPE
+                value: full # incremental/full
+              - name: DEBUG
+                value: "true"
+            volumeMounts:
+            - name: backup-dir
+              mountPath: /backups
+            - name: xtrabackup-configs
+              mountPath: /xtrabackup-configs
+            - name: mysql-data
+              mountPath: /var/lib/mysql
+          volumes:
+            - name: backup-dir
+              persistentVolumeClaim:
+               claimName: backup-dir-pv-claim
+            - name: mysql-data
+              persistentVolumeClaim:
+                claimName: mysql-data-percona-galera-0
+            - name: xtrabackup-configs
+              configMap:
+                name: xtrabackup-configs
+          restartPolicy: OnFailure
+---
+apiVersion: batch/v1beta1
+kind: CronJob
+metadata:
+  name: percona-xtrabackup-inc
+spec:
+  schedule: "0 0 1 1 *"
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 1
+  concurrencyPolicy: Forbid
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          containers:
+          - name: xtrabackup
+            image: spakmaro/xtrabackup
+            env:
+              - name: K8S_SERVICE_NAME
+                value: percona-galera-xtradb
+              - name: XTRABACKUP_PASSWORD
+                value: hesloheslo 
+              - name: BACKUP_TYPE
+                value: incremental # incremental/full
+              - name: DEBUG
+                value: "true"
+            volumeMounts:
+            - name: backup-dir
+              mountPath: /backups
+            - name: xtrabackup-configs
+              mountPath: /xtrabackup-configs
+            - name: mysql-data
+              mountPath: /var/lib/mysql
+          volumes:
+            - name: backup-dir
+              persistentVolumeClaim:
+                claimName: backup-dir-pv-claim
+            - name: mysql-data
+              persistentVolumeClaim:
+                claimName: mysql-data-percona-galera-0
+            - name: xtrabackup-configs
+              configMap:
+                name: xtrabackup-configs
+          restartPolicy: OnFailure
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: percona-xtrabackup-restore
+spec:
+  backoffLimit: 2
+  template:
+    spec:
+      containers:
+      - name: xtrabackup
+        image: spakmaro/xtrabackup
+        env:
+          - name: K8S_SERVICE_NAME
+            value: percona-galera-xtradb
+          - name: XTRABACKUP_PASSWORD
+            value: hesloheslo 
+          - name: BACKUP_TYPE
+            value: restore # incremental/full/restore
+          - name: RESTORE_DATE
+            value: "08-04-2018"
+          - name: DEBUG
+            value: "true"
+        volumeMounts:
+        - name: backup-dir
+          mountPath: /backups
+        - name: xtrabackup-configs
+          mountPath: /xtrabackup-configs
+        - name: mysql-data
+          mountPath: /var/lib/mysql
+      volumes:
+        - name: backup-dir
+          persistentVolumeClaim:
+            claimName: backup-dir-pv-claim
+        - name: mysql-data
+          persistentVolumeClaim:
+            claimName: mysql-data-percona-galera-0
+        - name: xtrabackup-configs
+          configMap:
+            name: xtrabackup-configs
+      restartPolicy: Never
